@@ -1,0 +1,39 @@
+[
+    {
+        "name":"users",
+        "root_path":"./assets/db/users/",
+        "db_name":"main.db",
+        "crypted":true,
+        "crypted_keys":["password"],
+        "keys":[
+            {"key":"user","value":"text PRIMARY KEY","name":"Kullanıcı adı"},
+            {"key":"password","value":"tex NOT NULL","name":"Şifre"}
+        ]
+    },
+    {
+        "name":"items",
+        "root_path":"./assets/db/items/",
+        "db_name":"items.db",
+        "crypted":false,
+        "crypted_key":null,
+        "keys":[
+            {"key":"id","value":"integer PRIMARY KEY","name":"id"},
+            {"key":"item_name","value":"text PRIMARY KEY","name":"Ürün ismi"},
+            {"key":"price","value":"real","name":"Fiyat"},
+            {"key":"desc","value":"text","name":"Açıklama"}
+        ]
+    },
+    {
+        "name":"items",
+        "root_path":"./assets/db/items/",
+        "db_name":"items.db",
+        "crypted":false,
+        "crypted_key":null,
+        "keys":[
+            {"key":"id","value":"integer PRIMARY KEY","name":"id"},
+            {"key":"item_name","value":"text PRIMARY KEY","name":"Ürün ismi"},
+            {"key":"price","value":"real","name":"Fiyat"},
+            {"key":"desc","value":"text","name":"Açıklama"}
+        ]
+    }
+]
