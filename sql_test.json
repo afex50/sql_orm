@@ -1,0 +1,72 @@
+[
+  {
+    "crypted_keys": [
+      "password"
+    ],
+    "db_name": "main.db",
+    "keys": [
+      {
+        "auto": true,
+        "constr": "PRIMARY KEY",
+        "key": "id",
+        "name": "id",
+        "type": "INTEGER"
+      },
+      {
+        "constr": "unique",
+        "key": "user",
+        "name": "isim",
+        "type": "TEXT"
+      },
+      {
+        "constr": "not null",
+        "key": "password",
+        "name": "şifre",
+        "type": "TEXT"
+      },
+      {
+        "constr": "",
+        "key": "desc",
+        "name": "açiklama",
+        "type": "TEXT"
+      }
+    ],
+    "name": "efe",
+    "root_path": "./db/users/"
+  },
+  {
+    "crypted_keys": [
+      "password"
+    ],
+    "db_name": "main.db",
+    "keys": [
+      {
+        "auto": true,
+        "constr": "PRIMARY KEY",
+        "key": "id",
+        "name": "id",
+        "type": "INTEGER"
+      },
+      {
+        "constr": "unique",
+        "key": "user",
+        "name": "isim",
+        "type": "TEXT"
+      },
+      {
+        "constr": "not null",
+        "key": "password",
+        "name": "şifre",
+        "type": "TEXT"
+      },
+      {
+        "constr": "",
+        "key": "pic",
+        "name": "resim",
+        "type": "BLOB"
+      }
+    ],
+    "name": "users",
+    "root_path": "./db/users/"
+  }
+]

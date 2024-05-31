@@ -1,25 +1,27 @@
-use std::{collections::HashMap, fmt::format, path::{self, Path}};
+use std::{collections::HashMap, fmt::format, path::Path};
 
 use rusqlite::{params, Connection};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use base64::prelude::*;
 
+use crate::others::{encrpyt_database, get_typeof, hahs_str, hash_string, validate_json, DataTypes, KeyTypes, SqlGeneric, SqlResult, UnionSearchQuery, UnionSearchthing};
+
 #[macro_export]
 macro_rules! new_table {
     () => {
+        
         {
             json!(
                 {
                     "name":"users",
                     "root_path":"./root/path/to/database/",
                     "db_name":"database_name.db",
-                    "crypted":true,
-                    "crypted_keys":["password"],
+                    "crypted_keys":[],
                     "keys":[
-                        {"key":"id","type":"INTEGER","constr":"PRIMARY KEY","auto":true,"name":"id"},
-                        {"key":"user","type":"TEXT","constr":"unique","name":"isim"},
-                        {"key":"password","type":"TEXT","constr":"not null","name":"şifre"},
+//                      {"key":"id","type":"INTEGER","constr":"PRIMARY KEY","auto":true,"name":"id"},
+//                      {"key":"user","type":"TEXT","constr":"unique","name":"isim"},
+//                      {"key":"password","type":"TEXT","constr":"not null","name":"şifre"},
                     ]
                 }
             )
@@ -30,7 +32,7 @@ macro_rules! new_table {
 /// salt:bcrypt için şifre, pass:veritabanı şifresi
 /// 
 /// 
-#[derive(Debug)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct SqlOrm{
     password:Option<Vec<u16>>,
     metadata_path:String,
@@ -40,20 +42,26 @@ pub struct SqlOrm{
 
 
 
-#[derive(Eq, Hash, PartialEq,Debug,Clone)]
-struct TableMeta{
+#[derive(Eq, Hash, PartialEq,Debug,Clone,Serialize,Deserialize)]
+pub struct TableMeta{
     name:String,
     root_path:String,
     db_name:String,
     crypted_keys:Option<Vec<String>>
 }
+impl TableMeta {
+    pub fn dump_cypted_keys(&self) -> &Option<Vec<String>> {
+        &self.crypted_keys
+    }
+}
+
 ///  keys stored in here
 /// ```
-/// [{"key":"id","value":"INTEGER AUTO INCREMENT","auto":true},...]
+/// [{"key":"id","value":"INTEGER AUTO INCREMENT","auto":true,"type":"INTEGER"},...]
 /// ```
-#[derive(Debug)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct SqlTable{
-    data:Value
+    pub data:Value
 }
 
 
@@ -64,7 +72,8 @@ pub enum SqlErr{
 #[derive(Debug,Clone)]
 enum Lul {
     Json(Value),
-    Data(TableMeta)
+    Data(TableMeta),
+    Path(String)
 }
 
 
@@ -86,9 +95,15 @@ enum Lul {
 /// 
 
 impl SqlOrm {
+
+    pub fn orm_to_json(&self) -> Value {
+        serde_json::to_value(self).unwrap()
+    }
+
     ///vay amk  
     /// bu bi yorum
-    pub fn init(pass:Option<String>,meta_path:&String,bcrypt_cost:u32) -> Self{
+    pub fn init<S:Into<String>>(pass:Option<S>,meta_path:S,bcrypt_cost:u32) -> Self{
+        let meta_path = &meta_path.into();
         let val:Value;
         if std::path::Path::new(meta_path).exists(){
             let reader = std::fs::read(std::path::Path::new(meta_path)).unwrap();
@@ -96,6 +111,7 @@ impl SqlOrm {
                 Ok(ok) => ok,
                 Err(_) => json!([]),
             };
+            
         }else {
             let mut anc = std::path::Path::new(meta_path).ancestors();
             anc.next();
@@ -109,7 +125,6 @@ impl SqlOrm {
         let mut tables = HashMap::<String,(TableMeta,SqlTable)>::new();
         let mut counter = 1;
 
-        let mut row_count = 1;
         for row in val.as_array().unwrap(){
             match validate_json(row){
                 Ok(_) => (),
@@ -131,8 +146,7 @@ impl SqlOrm {
                 db_name:        row.get("db_name").unwrap().as_str().unwrap().to_string(),
                 name:           row.get("name").unwrap().as_str().unwrap().to_string(),
                 root_path:      row.get("root_path").unwrap().as_str().unwrap().to_string()
-            };
-            row_count += 1;
+            };  
             
             let buf = SqlTable{data:row.get("keys").unwrap().clone()};
             tables.insert( row.get("name").unwrap().as_str().unwrap().to_string(),(meta_buf,buf) );
@@ -140,82 +154,102 @@ impl SqlOrm {
         }
         let pass = {
             match pass {
-                Some(som) => Some(hash_str::hash_str(som)),
+                Some(som) => Some(hash_string::hash_str(som.into())),
                 None => None,
             }
         };
-
-        return Self{
+        
+        let mut orm = Self{
             metadata_path:meta_path.to_string(),
             password:pass,
             tables:tables,
             bcrypt_cost:bcrypt_cost
         };
+        orm.new_table(val);
+        orm
     }
     pub fn new_table(
         &mut self,
-        val:Value
+        mut val:Value
     ) -> Result<(),String>{
         
-        match validate_json(&val){
-            Ok(_) => (),
-            Err(err) => return Err(err),
-        };
-        let buf = SqlTable{
-            data:val["keys"].clone()
-        };
-        let crypt_keys = match val.get("crypted_keys") {
-            Some(ok) => {
-                let mut ret = Vec::new();
-                for x in ok.as_array().unwrap(){
-                    ret.push(x.as_str().unwrap().to_string());
+        let mut count = 0;
+        if val.is_array(){
+            count = val.clone().as_array().unwrap().len();
+        }else {
+            count = 1;
+            val = json!([val]);
+        }
+        for x in 0..count{
+            //println!("val[0] : {:?}",val[0]);
+            let val = &val[0];
+            match validate_json(&val){
+                Ok(_) => (),
+                Err(err) => return Err(err),
+            };    
+            let buf = SqlTable{
+                data:val["keys"].clone()
+            };
+            let crypt_keys = match val.get("crypted_keys") {
+                Some(ok) => {
+                    let mut ret = Vec::new();
+                    for x in ok.as_array().unwrap(){
+                        ret.push(x.as_str().unwrap().to_string());
+                    }
+                    Some(ret)
+                },
+                None => None,
+            };
+            let name = val.get("name").unwrap().as_str().unwrap().to_string();
+            let db_path = format!("{}/{}",val["root_path"],val["db_name"]);
+        
+            let conn = match self.connect_db(&Lul::Json(val.clone())){
+                Ok(ok) => ok,
+                Err(err) => return Err(err),
+            };
+            encrpyt_database(&conn, &self.password);
+            
+            let keys:String = {
+                let f = val["keys"].as_array().unwrap();
+                let mut keys = Vec::<String>::new();
+                for x in f {
+                    let a = format!("{} {} {}",x["key"],x["type"].as_str().unwrap(),x["constr"].as_str().unwrap());
+                    keys.push(a);
+                    keys.push(",".to_string());
                 }
-                Some(ret)
-            },
-            None => None,
-        };
-        let name = val.get("name").unwrap().as_str().unwrap().to_string();
-        let db_path = format!("{}/{}",val["root_path"],val["db_name"]);
-
-        let conn = match self.connect_db(&Lul::Json(val.clone())){
-            Ok(ok) => ok,
-            Err(err) => return Err(err),
-        };
-        encrpyt_database(&conn, &self.password);
-        
-        let keys:String = {
-            let f = val["keys"].as_array().unwrap();
-            let mut keys = Vec::<String>::new();
-            for x in f {
-                let a = format!("{} {} {}",x["key"],x["type"].as_str().unwrap(),x["constr"].as_str().unwrap());
-                keys.push(a);
-                keys.push(",".to_string());
-            }
-            keys.pop();
-            keys.into_iter().collect::<String>()
-        };
-        let sql = format!("CREATE TABLE IF NOT EXISTS {} ({})",name.as_str(),keys.as_str());
-        //println!("{}",sql); 
-        match conn.execute(&sql, []){
-            Ok(_) => (),
-            Err(err) => return Err(format!("bişeyler yanlış gitti {}",err)),
-        };
-        
-        
-        let meta_buf = TableMeta{
-            crypted_keys:crypt_keys,
-            db_name:     val.get("db_name").unwrap().as_str().unwrap().to_string(),
-            name:        name.clone(),
-            root_path:   val.get("root_path").unwrap().as_str().unwrap().to_string()
-        };
-        //println!("{}\n----\n{:?}\n----\n{:?}",meta_buf.db_name,buf,val.get("db_name").unwrap().as_str().unwrap().chars().as_str());
-        self.tables.insert(name ,(meta_buf, buf));
-        self.save_metadata();
+                keys.pop();
+                keys.into_iter().collect::<String>()
+            };
+            let sql = format!("CREATE TABLE IF NOT EXISTS {} ({})",name.as_str(),keys.as_str());
+            //println!("{}",sql); 
+            match conn.execute(&sql, []){
+                Ok(_) => (),
+                Err(err) => return Err(format!("bişeyler yanlış gitti {}",err)),
+            };
+            
+            
+            let meta_buf = TableMeta{
+                crypted_keys:crypt_keys,
+                db_name:     val.get("db_name").unwrap().as_str().unwrap().to_string(),
+                name:        name.clone(),
+                root_path:   val.get("root_path").unwrap().as_str().unwrap().to_string()
+            };
+            //println!("{}\n----\n{:?}\n----\n{:?}",meta_buf.db_name,buf,val.get("db_name").unwrap().as_str().unwrap().chars().as_str());
+            self.tables.insert(name ,(meta_buf, buf));
+            self.save_metadata();
+            count+=1;
+        }
         Ok(())
     }
 
+
+    pub fn dump_tables(&self) -> &HashMap<String, (TableMeta, SqlTable)>{
+        &self.tables
+    }
+
     /// drops the table
-    pub fn remove_table(&mut self,table_name:String) -> Result<(), String>{
+    pub fn remove_table<S:Into<String>>(&mut self,table_name:S) -> Result<(), String>{
+        let table_name = table_name.into();
         let (meta,tables) = self.tables.get(&table_name).unwrap();
         let conn = match self.connect_db(&Lul::Data(meta.to_owned())){
             Ok(ok) => ok,
@@ -226,6 +260,7 @@ impl SqlOrm {
         match conn.execute(&sql_, params![]){
             Ok(_ok) => {
                 self.tables.remove(&table_name);
+                self.save_metadata();
                 return Ok(());
             },
             Err(err) => {
@@ -236,8 +271,8 @@ impl SqlOrm {
 
 
 
-    pub fn insert_generic<T>(&self,table:String,generic:SqlGeneric<T>) -> Result<(),String> where T : Serialize{
-
+    pub fn insert_generic<T,S:Into<String>>(&self,table:S,generic:SqlGeneric<T>) -> Result<(),String> where T : Serialize{
+        let table = table.into();
         let val :Value;
         match generic {
             SqlGeneric::One(som) => {
@@ -256,8 +291,17 @@ impl SqlOrm {
     /// ```
     /// insert("Users",serde_json::json!({"user":"salam","password":"12341234"}))
     /// ```
-    pub fn insert(&self,table:String,val:Value) -> Result<(),String>{
-        let (meta,tables) = self.tables.get(&table).unwrap();
+    pub fn insert<S:Into<String>>(&self,table:S,val:Value) -> Result<(),String>{
+        let table = table.into();
+        let meta;
+        let tables;
+        if let Some((met,tab)) = self.tables.get(&table){
+            meta = met;
+            tables = tab
+        }else {
+            return Err("Table not found".to_string());
+        }
+
         let conn = match self.connect_db(&Lul::Data(meta.to_owned())){
             Ok(ok) => ok,
             Err(err) => return Err(err),
@@ -276,7 +320,9 @@ impl SqlOrm {
             }
             //key_types
             let ktype = x["type"].as_str().unwrap();
-            keys.push((key,get_typeof(ktype).unwrap()));
+            let dat = (key,get_typeof(ktype).unwrap());
+            //println!("{:?}",dat);
+            keys.push(dat);
 
         }
         //println!("{:?}",keys);
@@ -293,6 +339,21 @@ impl SqlOrm {
                 let mut values = Vec::<String>::new();
                 let mut key_names = Vec::<String>::new(); 
                 for (key,valu) in map {
+                    let mut valu = valu.clone();
+                    if valu.is_array(){
+                        
+                        let val2 = valu.clone();
+                        let mut vec = Vec::with_capacity(val2.as_array().unwrap().len());
+                        for x in val2.as_array().unwrap(){
+                            match x.as_u64() {
+                                Some(som) => {vec.push(som as u8)},
+                                None => return Err("Blobda hata".to_string()),
+                            }
+                        }
+                        let str = BASE64_STANDARD.encode(vec);
+                        valu = json!(str)
+                        
+                    }    
                     let mut valx = valu.as_str().unwrap().to_string();
                     for x in &meta.crypted_keys{
                         if x.contains(key){
@@ -300,7 +361,7 @@ impl SqlOrm {
                             valx = e.clone();
                         }
                     }
-                    if keys.contains(&(key.as_str(),KeyTypes::Text)){
+                    if keys.contains(&(key.as_str(),KeyTypes::Text))  {
                         key_names.push(key.to_string());
                         key_names.push(",".to_string());
                         values.push("'".to_string());
@@ -311,6 +372,14 @@ impl SqlOrm {
                         key_names.push(key.to_string());
                         key_names.push(",".to_string());
                         values.push(valx);
+                        values.push(",".to_string());
+
+                    }else if keys.contains(&(key.as_str(),KeyTypes::Blob)) {
+                        key_names.push(key.to_string());
+                        key_names.push(",".to_string());
+                        values.push("'".to_string());
+                        values.push(valx);
+                        values.push("'".to_string());
                         values.push(",".to_string());
 
                     }
@@ -354,6 +423,21 @@ impl SqlOrm {
             let mut values = Vec::<String>::new();
             let mut key_names = Vec::<String>::new(); 
             for (key,valu) in map {
+                let mut valu = valu.clone();
+                if valu.is_array(){
+                    
+                    let val2 = valu.clone();
+                    let mut vec = Vec::with_capacity(val2.as_array().unwrap().len());
+                    for x in val2.as_array().unwrap(){
+                        match x.as_u64() {
+                            Some(som) => {vec.push(som as u8)},
+                            None => return Err("Blobda hata".to_string()),
+                        }
+                    }
+                    let str = BASE64_STANDARD.encode(vec);
+                    valu = json!(str)
+                    
+                }
                 let mut valx = valu.as_str().unwrap().to_string();
                 for x in &meta.crypted_keys{
                     if x.contains(key){
@@ -361,8 +445,9 @@ impl SqlOrm {
                         valx = e.clone();
                     }
                 }
-                //println!("{}",&valx);
-                if keys.contains(&(key.as_str(),KeyTypes::Text)){
+                //println!("key : {} , valx:{}",&key,valx);
+                //println!("{:?}",keys);
+                if keys.contains(&(key.as_str(),KeyTypes::Text)) || keys.contains(&(key.as_str(),KeyTypes::Blob)){
                     key_names.push(key.to_string());
                     key_names.push(",".to_string());
                     values.push("'".to_string());
@@ -379,7 +464,7 @@ impl SqlOrm {
                 else {
                     return Err("error in sql query".to_string());
                 }
-                
+                //println!("{} ok",key );
             }
             values.pop();
             key_names.pop();
@@ -407,8 +492,37 @@ impl SqlOrm {
             }            
         }
     }
+
+    ///no search command 
+    fn custom_command<S:Into<String>>(&self,table:S,query:S) -> Result<(), String>{
+        let meta;
+        let STable;
+        if let Some((met,tab)) = self.tables.get(&table.into()){
+            meta = met;
+            STable = tab;
+        }else {
+            return Err("Table not found".to_string());
+        }
+        
+        let conn:Connection = match self.connect_db(&Lul::Data(meta.clone())){
+            Ok(ok) => ok,
+            Err(err) => return Err(err),
+        };
+        match conn.execute(&query.into(), params![]) {
+            Ok(ok) => return Ok(()),
+            Err(err) => return Err(format!("{}",err)),
+        }
+    }
+
     fn search_inner(&self,sql_query:String,table:String,search_names:Option<Vec<String>>) ->Result<SqlResult,String> {
-        let (meta,STable) = self.tables.get(&table).unwrap();
+        let meta;
+        let STable;
+        if let Some((met,tab)) = self.tables.get(&table){
+            meta = met;
+            STable = tab
+        }else {
+            return Err("Table not found".to_string());
+        }
         let conn:Connection = match self.connect_db(&Lul::Data(meta.clone())){
             Ok(ok) => ok,
             Err(err) => return Err(err),
@@ -437,10 +551,10 @@ impl SqlOrm {
 
         encrpyt_database(&conn, &self.password);
 
-        println!("{}",sql_query);
+        //println!("{}",sql_query);
         let query = sql_query;
-        let mut stmt = conn.prepare(&query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
+        let mut stmt = conn.prepare(&query).map_err(|err| {return format!("{:?}",err);})?;
+        let mut rows = stmt.query([]).map_err(|err| {return format!("{:?}",err);})?;
 
 
     
@@ -451,7 +565,7 @@ impl SqlOrm {
                 for x in som {
                     let mut ok = false;
                     for (k,t) in &old {
-                        println!("x: {}, k: {}",x,k);
+                        //println!("x: {}, k: {}",x,k);
                         if x == k {
                             keyname_types.push((k.to_string(),t.clone()));
                             ok = true;
@@ -474,13 +588,17 @@ impl SqlOrm {
                 // println!("{counter}");
                 
                 let rowdata = match ktype {
-                    KeyTypes::Int =>  DataTypes::Int(row.get(counter).unwrap()),
-                    KeyTypes::Text => DataTypes::Text(row.get(counter).unwrap()),
-                    KeyTypes::Real => DataTypes::Real(row.get(counter).unwrap()),
-                    KeyTypes::Blob => DataTypes::Blob(row.get(counter).unwrap()),
+                    KeyTypes::Int =>  DataTypes::Int(row.get(counter). map_err(|err| {return format!("{:?}",err);})?),
+                    KeyTypes::Text => DataTypes::Text(row.get(counter).map_err(|err| {return format!("{:?}",err);})?),
+                    KeyTypes::Real => DataTypes::Real(row.get(counter).map_err(|err| {return format!("{:?}",err);})?),
+                    KeyTypes::Blob => DataTypes::Blob({
+                        let e :String = row.get(counter).map_err(|err| {return format!("{:?}",err);})?;
+                        BASE64_STANDARD.decode(e).map_err(|err| {return format!("{:?}",err);})?
+                        
+                    }),
                     KeyTypes::Null => DataTypes::Null,
                 };
-                println!("{:?}",rowdata);
+                //println!("{:?}",rowdata);
                 datas.insert(key.clone(), rowdata);
                 counter += 1;
             }
@@ -493,8 +611,10 @@ impl SqlOrm {
         let sql_query = format!("SELECT * FROM {} LIMIT {}",table,count);
         self.search_inner(sql_query, table,None)
     }
-    //blob and bull unsupported
-    pub fn search_where(&self,table:String,count:u32,key:&String,param:DataTypes) -> Result<SqlResult,String>{
+
+    //blob and null unsupported
+    pub fn search_where<S:Into<String>>(&self,table:S,count:u32,key:S,param:DataTypes) -> Result<SqlResult,String>{
+        let (table,key) = (table.into(),&key.into());
         let sql_query:String;
         match param {
             DataTypes::Text(ok) => sql_query = format!("SELECT * FROM {table} WHERE {key} = \'{ok}\' LIMIT {count}"),
@@ -516,7 +636,16 @@ impl SqlOrm {
         self.search_inner(sql_query, table,Some(quer_names))
     }
 
-    pub fn search_w_n_where(&self,table:String,count:u32,search_names:Vec<String>,key:&String,param:DataTypes) -> Result<SqlResult,String> {
+    pub fn search_w_n_where<S:Into<String>,T:Into<String>,U:Into<String>>(&self,table:S,count:u32,search_names:Vec<T>,key:U,param:DataTypes) -> Result<SqlResult,String> {
+        let table = table.into();
+        let key = key.into();
+        let search_names = {
+            let mut vec = vec![];
+            for x in search_names{
+                vec.push(x.into());
+            }
+            vec
+        };
         let sql_query:String;
         let quer_names = search_names.clone();
         let mut new_names = Vec::new();
@@ -536,6 +665,147 @@ impl SqlOrm {
     }
 
 
+
+    fn union_search_inner(&self,tables:Vec<String>,count:u32,_where:Option<String>,) -> Result<SqlResult,String>{
+        /*kontrol*/{
+            let mut tables_not_found= Vec::new();
+            'a:for y in &tables{
+                for (x,_) in self.dump_tables(){
+                    if x == y{
+                        continue 'a;
+                    }
+                }
+                tables_not_found.push(y.clone());
+                tables_not_found.push(", ".to_string());
+
+            }
+            if !tables_not_found.is_empty(){
+                tables_not_found.pop();
+                return Err(format!("tables not found :{}",tables_not_found.concat()));
+            }
+        }
+        // let mut table_with_db = HashMap::<String,Vec<Value>>::new();
+        // for (table,e) in self.dump_tables(){
+        //     if tables.contains(table) && table_with_db.is_empty(){
+        //         for x in e.1.data.as_array().unwrap(){
+        //             table_with_db.insert(format!("{}{}",x.get("root_path").unwrap().as_str().unwrap(),x.get("db_name").unwrap().as_str().unwrap()), vec![x.clone()]);
+        //         }
+        //     }
+        //     let mut new_fields = Vec::<Value>::new();
+        //     if tables.contains(table){
+        //          for l in table_with_db.get_mut(&format!("{}{}",e.1.data.get("root_path").unwrap().as_str().unwrap(),e.1.data.get("db_name").unwrap().as_str().unwrap())){
+        //             for _x in l{
+        //                 for _y in e.1.data.as_array().unwrap(){
+        //                     if _x == _y{
+        //                         new_fields.push(_x.clone())
+        //                     }
+        //                 }
+        //             }
+        //             l = &mut new_fields;
+        //         }
+        //     }
+        // }
+        // let mut querys = Vec::<String>::new();
+        // let same_keys = {
+        //     let mut keys = Vec::<String>::new();
+        //     for x in same_fields{
+        //         keys.push(x
+        //                 .as_object()
+        //                 .unwrap()
+        //                 .get("key")
+        //                 .unwrap()
+        //                 .as_str()
+        //                 .unwrap()
+        //                 .to_string());
+        //         keys.push(",".to_string());
+        //     }
+        //     keys.pop();
+        //     keys.concat()
+        // };
+        // key=path val = {table_name,keys}
+
+        let same_keys={
+            let mut same_tables = Vec::new();
+            for (table,e) in self.dump_tables(){
+                if tables.contains(table) && same_tables.is_empty(){
+                    for x in e.1.data.as_array().unwrap(){
+                        same_tables.push(x.clone());
+                    }
+                }
+                let mut new_fields = Vec::<Value>::new();
+                if tables.contains(table){
+                        for _x in &same_tables{
+                            for _y in e.1.data.as_array().unwrap(){
+                                if _x == _y{
+                                    new_fields.push(_x.clone())
+                                }
+                            }
+                        
+                    }
+                    same_tables = new_fields.clone();
+                }
+            }
+            // println!("{:#?}",same_tables);
+            same_tables
+        };
+
+
+        let mut search_names:Vec<String> = Vec::new(); 
+
+        let search_keys = {
+            let mut kys = Vec::new();
+            for x in &same_keys{
+                kys.push(x.get("key").unwrap().as_str().unwrap());
+                search_names.push(x.get("name").unwrap().as_str().unwrap().to_string());
+                kys.push(",");
+            }
+            kys.pop();
+            kys.concat()
+        };
+
+        let mut table_with_db = HashMap::<String,Vec<UnionSearchthing>>::new();
+        for x in tables{
+            let a = self.tables.get(&x).unwrap();
+            let path = format!("{}{}",a.0.root_path,a.0.db_name);
+            if table_with_db.contains_key(&path){
+                table_with_db.get_mut(&path).unwrap().push(UnionSearchthing{table:x,keys:a.1.data.clone()})
+            }
+            else {
+                table_with_db.insert(path, vec![UnionSearchthing{table:x,keys:a.1.data.clone()}]);
+            }
+        }
+
+        let mut queries = Vec::<UnionSearchQuery>::new();
+        for (path,thing) in table_with_db{
+            let mut master_query=Vec::new();
+            for x in thing{
+                let query = format!("select {} from {} count {count} {}",search_keys,x.table,_where.clone().unwrap_or("".to_string()));
+                master_query.push(query);
+                master_query.push(" union ".to_string());
+            }
+            master_query.pop();
+            queries.push(UnionSearchQuery::new(path, master_query.concat()));
+        }
+        let mut results = Vec::<SqlResult>::new();
+        println!("{:#?}",queries);
+        for x in queries{
+            let conn = self.connect_db(&Lul::Path(x.path)).map_err(|err| format!("{}",err))?;
+        }
+
+
+        // let conn = Connection::open(Path::new())
+
+        todo!()
+    }
+    pub fn union_search(&self,tables:Vec<String>,count:u32){
+        self.union_search_inner(tables, count, None).unwrap();
+    }
+
+
+
+
+
+
     ///orm'yi dosyaya kaydeder
     fn save_metadata(&self){
         let meta_path = &self.metadata_path;
@@ -550,11 +820,9 @@ impl SqlOrm {
 
             match &meta.crypted_keys {
                 Some(some) => {
-                    val.insert("crypted".to_string(), json!(false));
                     val.insert("crypted_keys".to_string(), json!(some));
                 },
                 None => {
-                    val.insert("crypted".to_string(), json!(false));
                     val.insert("crypted_keys".to_string(), json!([]));
                 },
             };
@@ -593,284 +861,39 @@ impl SqlOrm {
                 root_path = lul.root_path.clone();
                 db_name = lul.db_name.to_owned();
             },
+            Lul::Path(String) => {
+                let pth = Path::new(&String);
+                let mut a = pth.ancestors();
+                let _a :Vec<u8>= pth.file_name().unwrap().to_str().unwrap().bytes().collect();
+                let str = String::from_utf8(_a).unwrap();
+                db_name = str;             
+                root_path = {
+                    let a = a.next().unwrap().to_str().unwrap();
+                    String::from_utf8(a.bytes().collect::<Vec<u8>>()).unwrap()
+                };
+            },
         }
         
         let conn :Connection;
         let db_path = format!("{}/{}",root_path,db_name);
         if Path::new(&db_path).exists(){
-            conn = rusqlite::Connection::open(db_path).unwrap();
+            conn = rusqlite::Connection::open(db_path).map_err(|e| format!("{}",e))?;
             encrpyt_database(&conn, &self.password);
             //conn.execute("sql", params)
         }else {
             let _ = std::fs::create_dir_all(Path::new(&root_path));
             let _ = std::fs::write(format!("{}{}",root_path,db_name), "");
-            conn = rusqlite::Connection::open(db_path).unwrap();
+            conn = rusqlite::Connection::open(db_path).map_err(|e| format!("{}",e))?;
             encrpyt_database(&conn, &self.password);
         }
         Ok(conn)
     }
 
-    fn connect_db_with_name(&self,name:String) -> Result<Connection, String> {
+    fn connect_db_with_table_name(&self,name:String) -> Result<Connection, String> {
         let (meta,STable) = self.tables.get(&name).unwrap();
         self.connect_db(&Lul::Data(meta.clone()))
 
     }
-    
-
 
 }
 
-
-
-fn validate_json(val:&Value) -> Result<(),String>{
-    let val = val.clone();
-    let mut map:Vec<(&str,Option<&Value>)> = Vec::new() ;
-    map.push(("root_path",      val.get("root_path")));
-    map.push(("name",           val.get("name")));
-    map.push(("crypted",        val.get("crypted")));
-    map.push(("crypted_keys",   val.get("crypted_keys")));
-    map.push(("db_name",        val.get("db_name")));
-    let mut errs = Vec::<String>::new();
-    let mut err = false;
-    for  (key,x) in map {
-        match x {
-            Some(_) => continue,
-            None => {
-                err = true;
-                errs.push(format!("error on: {}\n",key));
-            },
-        }
-    }
-    if val.get("keys").unwrap() == &json!([]){
-        err = true;
-        errs.push("error on: no sql rows".to_string());
-    }
-    if err{
-        return Err(format!("{:?}",errs));
-    }else {
-        return Ok(());
-    }
-}
-
-fn encrpyt_database(conn:&Connection,pass:&Option<Vec<u16>>){
-    let _ = match pass {
-        Some(som) => {
-            {
-                let pass = hash_str::unhash_str(som);
-                conn.execute(format!("pragma key = '{}';",pass).as_str(), [])
-            }
-        },
-        None => return,
-    };
-    
-}
-
-pub fn new_table_template()->Value{
-    json!(
-        {
-            "name":"users",
-            "root_path":"./root/path/to/database/",
-            "db_name":"database_name.db",
-            "crypted":true,
-            "crypted_keys":["password"],
-            "keys":[
-                {"key":"id","type":"INTEGER","constr":"PRIMARY KEY","auto":true,"name":"id"},
-                {"key":"user","type":"TEXT","constr":"unique","name":"isim"},
-                {"key":"password","type":"TEXT","constr":"not null","name":"şifre"},
-            ]
-        }
-    )
-}
-
-fn hahs_str(val:&str,cost:u32) -> String {
-    let buf = bcrypt::hash(val, cost).unwrap();
-    let e = BASE64_STANDARD.encode(buf);
-    e
-}
-
-fn get_typeof(tip:&str) -> Option<KeyTypes>{
-    match tip {
-        "INTEGER" | "İNTEGER" | "int" | "INT" => Some(KeyTypes::Int),
-        "TEXT" | "Text" | "text" | "string" | "String" | "STRING" => Some(KeyTypes::Text),
-        "REAL" | "Real" | "real" | "FLOAT" | "Float" | "float" => Some(KeyTypes::Real),
-        "BLOB" | "blob" | "Blob" => Some(KeyTypes::Blob),
-        "Null" | "None" | "NONE" | "NULL" => Some(KeyTypes::Null),
-        _ => None
-    }
-}
-
-#[derive(Debug,Serialize,Deserialize)]
-pub struct SqlResult{
-    key_names:HashMap<String,String>,
-    values:Vec<HashMap<String,DataTypes>>
-}
-
-#[derive(Debug,Serialize,Deserialize)]
-pub enum DataTypes{
-    Text(String),
-    Int(i32),
-    Real(f32),
-    Blob(Vec<u8>),
-    Null
-}
-impl SqlResult{
-    pub fn as_json(&self) -> serde_json::Value{
-        let mut main = serde_json::Map::new();
-        let key_names = serde_json::to_value(&self.key_names).unwrap();
-        let mut values = Vec::new();
-        for x in &self.values{
-            let v = self.deserialize_value(x);
-            values.push(v);
-        }
-        let values = serde_json::to_value(&values).unwrap();
-        main.insert("key_names".to_string(), key_names);
-        main.insert("values".to_string(), values);
-        return json!(main);
-    }
-    pub fn as_generic<T>(&self) -> SqlGeneric<T>
-    where T :  DeserializeOwned,{
-        if self.values.len() == 0 {
-            return SqlGeneric::Empty;
-        }
-        else if self.values.len()  == 1{
-            let buf = self.deserialize_value(&self.values[0]);
-            let res = serde_json::from_value::<T>(buf).unwrap();
-            return SqlGeneric::One(res); 
-        }
-        else {
-            let mut result = Vec::<T>::new();
-            for x in &self.values{
-                
-                let buf = self.deserialize_value(x);
-                let t = serde_json::from_value::<T>(buf).unwrap();
-                    result.push(t);
-            }
-            return SqlGeneric::Arr(result);
-        }
-    }
-
-    fn deserialize_value(&self,val :&HashMap<String,DataTypes>) -> Value{
-            let mut buf_map = serde_json::Map::new();
-            for (key , val) in val{
-                match val {
-                    DataTypes::Text(valx) => buf_map.insert(key.clone(), json!(valx)),
-                    DataTypes::Int(valx) => buf_map.insert(key.clone(), json!(valx)),
-                    DataTypes::Real(valx) => buf_map.insert(key.clone(), json!(valx)),
-                    DataTypes::Blob(valx) => buf_map.insert(key.clone(), json!(valx)),
-                    DataTypes::Null => buf_map.insert(key.clone(), json!(null)),
-                };
-            } 
-            let buf = json!(buf_map);
-            buf
-    }
-    
-
-
-}
-
-#[derive(Debug,PartialEq,Clone)]
-enum KeyTypes{
-    Int,
-    Text,
-    Real,
-    Blob,
-    Null
-}
-#[derive(Debug)]
-pub enum SqlGeneric<T>{
-    One(T),
-    Arr(Vec<T>),
-    Empty,
-
-    
-}
-
-impl<T> SqlGeneric<T> {
-    pub fn is_arr(&self) -> bool{ 
-        match &self {
-        SqlGeneric::Arr(_) => true,
-        _=> false
-    }}
-    pub fn is_one(&self) -> bool{ 
-        match &self {
-        SqlGeneric::One(_) => true,
-        _=> false
-    }}
-    pub fn is_empty(&self) -> bool{ 
-        match &self {
-        SqlGeneric::Empty => true,
-        _=> false
-    }}
-    pub fn arr(&self) -> &Vec<T>{
-        match &self {
-            SqlGeneric::Arr(a) => a,
-            _=> panic!("Not arr")
-        }
-    }
-    pub fn one(&self) -> &T{
-        match &self {
-            SqlGeneric::One(a) => a,
-            _=> panic!("Not one")
-        }
-    }
-    pub fn empty(&self) -> (){
-        match &self {
-            SqlGeneric::Empty => (),
-            _=> panic!("zaa")
-        }
-    }
-    pub fn arr_mut(&mut self) -> &mut Vec<T>{
-        match self {
-            SqlGeneric::Arr(a) => a,
-            _=> panic!("Not arr")
-        }
-    }
-    pub fn one_mut(&mut self) -> &mut T{
-        match self {
-            SqlGeneric::One(a) => a,
-            _=> panic!("Not one")
-        }
-    }
-    pub fn arr_real(self) -> Vec<T>{
-        match self {
-            SqlGeneric::Arr(a) => a,
-            _=> panic!("Not arr")
-        }
-    }
-    pub fn one_real(self) -> T{
-        match self {
-            SqlGeneric::One(a) => a,
-            _=> panic!("Not one")
-        }
-    }
-}
-
-mod hash_str{
-    use base64::prelude::*;
-    pub fn hash_str(str:String) -> Vec<u16>{
-        let str = BASE64_STANDARD.encode(str);
-        let mut hashed = Vec::new();
-        let mut count = 0;
-        for x in str.as_bytes(){
-            count += 1;
-            hashed.push((x.clone() as u16 + count as u16));
-        }
-        drop(str);
-        hashed
-    
-    }
-    pub fn unhash_str(str:&Vec<u16>) -> String{
-        let mut  count = 0;
-        let mut unhashed = Vec::<u8>::new();
-    
-        for x in str{
-            count +=1;
-            unhashed.push((x - count) as u8);
-        }
-        let unhahed = String::from_utf8(unhashed).unwrap();
-        let unhahed = BASE64_STANDARD.decode(unhahed).unwrap();
-        let unhahed = String::from_utf8(unhahed).unwrap();
-        unhahed
-    
-    }
-}

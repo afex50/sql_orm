@@ -1,20 +1,19 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc, sync::Arc};
 
 use base64::prelude::*;
 use bcrypt::BASE_64;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use crate::{new_table, orm};
 #[macro_use]
-use crate::orm::{SqlGeneric, SqlOrm,};
+use crate::prelude::{SqlGeneric, SqlOrm,};
 
 macro_rules! test_orm {
     () => {
         {
-            let mut orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
-            let table = new_table!();
-            orm.new_table(table).unwrap();
-            orm
+            SqlOrm::init(Some("ahmte.efe".to_string()), "./sql_test.json".to_string(), 4)
+            
         }
     };
 }
@@ -66,7 +65,7 @@ fn test_json() {
 
 #[test]
 fn test_orm_search() {
-    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
+    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), "./sql_test.json".to_string(), 4);
     let e = orm.search("users".to_string(), 2);
     println!("{:?}",e.unwrap().as_generic::<User>().arr())
 }
@@ -89,7 +88,7 @@ fn test_orm_insert() {
         }
     );
     //let mut orm = SqlOrm::init("vD01Cm8M&2K4hQ6VjeoqH", Some("ahmte.efe".to_string()), "./sql_test.json");
-    let mut orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
+    let mut orm = SqlOrm::init(Some("ahmte.efe".to_string()), "./sql_test.json".to_string(), 4);
     orm.new_table(e.clone()).unwrap();
     let mut v = Vec::<Result<(), String>>::new();
     let a = orm.insert(
@@ -112,7 +111,7 @@ fn test_orm_insert() {
 
 #[test]
 fn test_search() {
-    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
+    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), "./sql_test.json".to_string(), 4);
     let e = orm.search("users".to_string(), 1).unwrap();
     println!("{:#?}",e.as_json());  
 }
@@ -122,17 +121,18 @@ struct User {
     id: i32,
     user: String,
     password: String,
+    pic:Vec<u8>
 }
 
 #[test]
 fn test_generic() {
-    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
+    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), "./sql_test.json".to_string(), 4);
     let e = orm.search("users".to_string(), 3).unwrap();
     let person = e.as_generic::<User>();
     match person {
         SqlGeneric::One(usr) => println!("{:?}", usr),
         SqlGeneric::Arr(usrs) => println!("{:#?}", usrs),
-        SqlGeneric::Empty => println!("boş"),
+        SqlGeneric::Empty => (),
     }
     let e = orm.search("users".to_string(), 1).unwrap();
     let person = e.as_generic::<User>();
@@ -183,29 +183,33 @@ mod hashs{
 struct UserG {
     user: String,
     password: String,
+    pic:Vec<u8>
 }
 
 #[test]
 fn test_insert_generic() {
-    let orm = SqlOrm::init(Some("ahmte.efe".to_string()), &"./sql_test.json".to_string(), 4);
+    let orm = SqlOrm::init(Some("ahmte.efe"), "./sql_test.json", 4);
     let user = UserG {
         user: "efefefe".to_string(),
         password: "asfewpıfema".to_string(),
+        pic:vec![1,23,4,42,13,233,231]
     };
     let mut vec = Vec::new();
-    let e = orm.insert_generic("users".to_string(), SqlGeneric::One(user));
+    let e = orm.insert_generic("users", SqlGeneric::One(user));
     vec.push(e);
     let user1 = UserG {
         user: "salamo od".to_string(),
         password: "dslfmaspkas".to_string(),
+        pic:vec![1,23,4,42,255,12,244]
     };
     let user2 = UserG {
         user: "alakug".to_string(),
         password: "gğprwogw".to_string(),
+        pic:vec![1,23,4,42,255,255,255]
     };
     let generics = vec![user1, user2];
-    let e = orm.insert_generic("users".to_string(), SqlGeneric::Arr(generics));
-    vec.push(e);
+    let e = orm.insert_generic("users", SqlGeneric::Arr(generics));
+    vec.push(e);    
     for x in vec {
         match x {
             Ok(ok) => println!("ok"),
@@ -241,3 +245,142 @@ fn test_search_field(){
     
 }
 
+#[test]
+fn test_drop_table(){
+    let mut orm = test_orm!();
+    orm.remove_table("users").unwrap();
+}
+
+#[test]
+fn test_insert_blob(){}
+
+#[test]
+fn test_blob_insert_to_db(){
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute("CREATE TABLE IF NOT EXISTS blob (b BLOB)", params![]).unwrap();
+
+    let file = std::fs::read("./admin.jpg").unwrap();
+    let bfile = BASE64_STANDARD.encode(file);
+    let sql = format!("INSERT INTO blob (b) values ('{}')",bfile);
+    conn.execute(&sql, params![]).unwrap();
+
+
+
+    let vec = vec![1,42,5,3,23,52,5];
+    let vec = String::from_utf8(vec).unwrap();
+    let sql = format!("INSERT INTO blob (b) values ('{}')",vec);
+    conn.execute(&sql, params![]).unwrap();
+    let mut stmt = conn.prepare("select * from blob").unwrap();
+    let mut names = Vec::<String>::new();
+    let mut rows = stmt.query([]).unwrap();
+    while let Some(row) = rows.next().unwrap() {
+        names.push(row.get(0).unwrap());
+    }
+    println!("{:#?}",names);
+    std::fs::write("./out.base64", names[0].clone());
+    let file2 = BASE64_STANDARD.decode(names[0].clone()).unwrap();
+    std::fs::write("./out.jpg", file2).unwrap();
+    
+}
+
+
+
+
+#[test]
+fn arc_test(){
+  let mut e = Arc::new(RefCell::new(232));
+  e.replace(2);
+  let mut af = e.clone();
+  af.replace(42);
+  println!("{:?}",e);
+}
+
+
+#[test]
+fn test_inner_join(){
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute("CREATE TABLE IF NOT EXISTS table_a (b TEXT, a TEXT,c INT)", params![]).unwrap();
+    conn.execute("CREATE TABLE IF NOT EXISTS table_b (b TEXT, a_a TEXT,c INT)", params![]).unwrap();
+    conn.execute(r#"INSERT INTO table_a (b,a,c) Values('efe','ahmet',1)"#, params![])     .unwrap();
+    conn.execute(r#"INSERT INTO table_a (b,a,c) Values('tuna','furkan',2)"#, params![])   .unwrap();
+    conn.execute(r#"INSERT INTO table_a (b,a,c) Values('efe','furkan',3)"#, params![])    .unwrap();
+    conn.execute(r#"INSERT INTO table_a (b,a,c) Values('furkan','ahmet',4)"#, params![])  .unwrap();
+    conn.execute(r#"INSERT INTO table_b (b,a_a,c) Values('zaza','baba',11)"#, params![])  .unwrap();
+    conn.execute(r#"INSERT INTO table_b (b,a_a,c) Values('zuzu','bobo',12)"#, params![])  .unwrap();
+    conn.execute(r#"INSERT INTO table_b (b,a_a,c) Values('zozo','bebe',13)"#, params![])  .unwrap();
+    conn.execute(r#"INSERT INTO table_b (b,a_a,c) Values('zeze','bıbı',14)"#, params![])  .unwrap();
+
+
+    let mut objects = Vec::<serde_json::Value>::new();
+    let mut stmt = conn.prepare("select distinct b,c from table_a union select b,c from table_b").unwrap();
+
+    let mut rows = stmt.query([]).map_err(|err| {return format!("{:?}",err);}).unwrap();
+    while let Some(row) = rows.next().unwrap() { 
+        println!("{:?}",&row);
+        objects.push(json!( {   
+            //"b": row.get::<usize,Option<String>>(0).unwrap(),
+            //"c": row.get::<usize,Option<i32>>(1).unwrap(),
+            //"c": row.get::<usize,i32>(2).unwrap(),
+        }));
+
+    }
+
+
+
+    //println!("{:#?}",objects);
+
+
+}
+
+
+#[test]
+fn test_val_eq(){
+    let a = json!({
+        "sa":"as",
+        "la":"ula"
+    });
+    let b = json!({
+        "sa":"as",
+        "la":"ulan"
+    });
+    assert_eq!(a,b)
+}
+
+#[test]
+fn test_union_search(){
+    let orm = SqlOrm::init(None, "./sql_test.json", 5);
+    /*{
+        orm.insert("users", json!({"user":"ahmet1","password":"solo","pic":"htrsjyrjty"})).unwrap();
+        orm.insert("efe", json!({"user":"efe","password":"sala","desc":"asfasfafs"})).unwrap();
+        orm.insert("efe", json!({"user":"efe1","password":"sala","desc":"tjrydyhrhf"})).unwrap();
+        orm.insert("efe", json!({"user":"efe2","password":"sala","desc":"asdasfdfa"})).unwrap();
+        orm.insert("efe", json!({"user":"efe3","password":"sala","desc":"djswrgaerg"})).unwrap();
+        orm.insert("efe", json!({"user":"efe4","password":"sala","desc":"bjcdrjtsrh"})).unwrap();
+        orm.insert("efe", json!({"user":"efe5","password":"sala","desc":"aşsmfasfkmep"})).unwrap();
+        orm.insert("efe", json!({"user":"efe6","password":"sala","desc":"htrsjyrjty"})).unwrap();
+        orm.insert("users", json!({"user":"ahmet","password":"solo","pic":"htrsjyrjty"})).unwrap();
+        orm.insert("users", json!({"user":"ahmet2","password":"solo","pic":"htrsjyrjty"})).unwrap();
+        orm.insert("users", json!({"user":"ahmet3","password":"solo","pic":"htrsjyrjty"})).unwrap();
+        orm.insert("users", json!({"user":"ahmet4","password":"solo","pic":"htrsjyrjty"})).unwrap();
+        orm.insert("users", json!({"user":"ahmet5","password":"solo","pic":"htrsjyrjty"})).unwrap();
+    }
+    */
+
+
+    orm.union_search(vec!["efe".to_string(),"users".to_string()], 10);
+}
+
+
+#[test]
+fn anc_test(){
+    let path = Path::new("./sa/as/naber.js");
+    let mut anc = path.ancestors();
+    let a = path.parent().unwrap();
+    let a :Vec<u8>= path.file_name().unwrap().to_str().unwrap().bytes().collect();
+    let str = String::from_utf8(a).unwrap();
+    println!("{:?}",str);
+    println!("{}",anc.next().unwrap().to_str().unwrap());
+    println!("{:?}",anc.next());
+    println!("{:?}",anc.next());
+
+}

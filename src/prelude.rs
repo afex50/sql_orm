@@ -1,1 +1,2 @@
-use super::orm::{SqlOrm,DataTypes,SqlResult,SqlGeneric};
+pub use super::orm::SqlOrm;
+pub use super::others::{DataTypes,SqlResult,SqlGeneric};
